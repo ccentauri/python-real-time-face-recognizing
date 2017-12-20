@@ -1,1 +1,1 @@
-# python-real-time-face-recognizing
+# Realtime face recognizing using Python
