@@ -1,0 +1,211 @@
+import concurrent.futures
+import itertools
+import multiprocessing
+import os
+import sys
+import time
+import warnings
+
+import cv2
+import face_recognition as fr
+import imutils
+import scipy.misc
+
+
+def draw_face_element(frame_to_draw, coordinates):
+    for landmark_item in coordinates:
+        index = coordinates.index(landmark_item)
+
+        if index + 1 >= len(coordinates):
+            return
+
+        cv2.line(frame_to_draw,
+                 (coordinates[index][0] * 4, coordinates[index][1] * 4),
+                 (coordinates[index + 1][0] * 4, coordinates[index + 1][1] * 4),
+                 (0, 255, 255),
+                 DRAW_LINE_THICKNESS)
+
+
+def test_image(image_to_check, known_names, known_face_encodings, tolerance=0.6, show_distance=False):
+    print("test_image")
+
+    unknown_image = image_to_check
+
+    # Scale down image
+    if unknown_image.shape[1] > 1600:
+        scale_factor = 1600.0 / unknown_image.shape[1]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            unknown_image = scipy.misc.imresize(unknown_image, scale_factor)
+
+    unknown_encodings = fr.face_encodings(unknown_image)
+
+    for unknown_encoding in unknown_encodings:
+        distances = fr.face_distance(known_face_encodings, unknown_encoding)
+        result = list(distances <= tolerance)
+
+        if True in result:
+            print("True")
+        else:
+            print("False")
+
+
+def process_images_in_process_pool(images_to_check, known_names, known_face_encodings, number_of_cpus, tolerance,
+                                   show_distance):
+    print("process_images_in_process_pool")
+
+    if number_of_cpus == -1:
+        processes = None
+    else:
+        processes = number_of_cpus
+
+    pool = multiprocessing.Pool(processes=processes)
+
+    function_parameters = zip(
+        itertools.repeat(images_to_check),
+        itertools.repeat(known_names),
+        itertools.repeat(known_face_encodings),
+        itertools.repeat(tolerance),
+        itertools.repeat(show_distance)
+    )
+
+    pool.starmap(test_image, function_parameters)
+
+
+WINDOW_NAME = 'Face recognition'
+FRAME_FOR_PROCESS = 5
+DRAW_LINE_THICKNESS = 1
+
+video_capture = cv2.VideoCapture(0)
+
+dir_name = sys.argv[1]
+
+encodings = []
+names = []
+
+# Initialize variables
+face_locations = []
+face_encodings = []
+face_names = []
+face_landmarks = []
+process_this_frame = 0
+
+
+def create_encodings(file_name):
+    image = fr.load_image_file(dir_name + "/" + file_name)
+    return fr.face_encodings(image)[0]
+
+
+def create_encoding(frame, locations):
+    return fr.face_encodings(frame, locations)
+
+
+def compare_faces(encoding_to_check):
+    return fr.compare_faces(encodings, encoding_to_check)
+
+
+with concurrent.futures.ProcessPoolExecutor() as executor:
+    for root, dirs, files in os.walk(dir_name):
+        for file_name, enc in zip(files, executor.map(create_encodings, files)):
+            names.append(file_name)
+            encodings.append(enc)
+
+print("Found photos: " + str(names))
+print("Starting video capturing...")
+
+while True:
+    ret, frame = video_capture.read()
+
+    small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+
+    if process_this_frame == FRAME_FOR_PROCESS:
+        face_names = []
+        face_landmarks = []
+
+        face_locations = fr.face_locations(small_frame)
+        # face_encodings = fr.face_encodings(small_frame, face_locations)
+
+        # with concurrent.futures.ThreadPoolExecutor() as executor:
+        #     face_encodings = executor.submit(create_encoding, small_frame, face_locations).result()
+
+        face_location_landmark = fr.face_landmarks(small_frame)
+
+        for face_landmark in face_location_landmark:
+            if len(face_landmark) > 0:
+                face_landmarks.append(face_landmark)
+
+        # with concurrent.futures.ThreadPoolExecutor() as executor:
+        #     for face_encoding, match in zip(face_encodings, executor.map(compare_faces, face_encodings)):
+        #         # match = fr.compare_faces(encodings, face_encoding)
+        #         name = "Unknown"
+        #
+        #         for m in match:
+        #             if m:
+        #                 name = names[match.index(m)]
+        #
+        #         face_names.append(name)
+
+        process_this_frame = 0
+    else:
+        process_this_frame = process_this_frame + 1
+
+    # Display the results
+    for landmark in face_landmarks:
+        # Draw face
+        draw_face_element(frame, landmark['chin'])
+        draw_face_element(frame, landmark['nose_tip'])
+        draw_face_element(frame, landmark['nose_bridge'])
+        draw_face_element(frame, landmark['left_eyebrow'])
+        draw_face_element(frame, landmark['right_eyebrow'])
+        draw_face_element(frame, landmark['left_eye'])
+        draw_face_element(frame, landmark['right_eye'])
+        draw_face_element(frame, landmark['top_lip'])
+        draw_face_element(frame, landmark['bottom_lip'])
+
+    # for (top, right, bottom, left), name, landmark in zip(face_locations, face_names, face_landmarks):
+    #     # Draw face
+    #     draw_face_element(frame, landmark['chin'])
+    #     draw_face_element(frame, landmark['nose_tip'])
+    #     draw_face_element(frame, landmark['nose_bridge'])
+    #     draw_face_element(frame, landmark['left_eyebrow'])
+    #     draw_face_element(frame, landmark['right_eyebrow'])
+    #     draw_face_element(frame, landmark['left_eye'])
+    #     draw_face_element(frame, landmark['right_eye'])
+    #     draw_face_element(frame, landmark['top_lip'])
+    #     draw_face_element(frame, landmark['bottom_lip'])
+    #
+    #     # Scale back up face locations since the frame we detected in was scaled to 1/4 size
+    #     top *= 4
+    #     right *= 4
+    #     bottom *= 4
+    #     left *= 4
+    #
+    #     # Draw a box around the face
+    #     # cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
+    #
+    #     # Draw a label with a name below the face
+    #     # cv2.rectangle(frame, (left, bottom - 35), (right, bottom), (0, 0, 255), cv2.FILLED)
+    #     font = cv2.FONT_HERSHEY_DUPLEX
+    #     cv2.putText(frame, name, (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
+
+    # Display the resulting image
+    cv2.imshow(WINDOW_NAME, frame)
+
+    # Hit 'q' on the keyboard to quit!
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+video_capture.release()
+cv2.destroyAllWindows()
+
+# start = time.time()
+# print("Time taken = {0:.5f}".format(time.time() - start))
+
+# process_images_in_process_pool(
+#     fr.load_image_file("test.jpg"),
+#     names,
+#     encodings,
+#     2,
+#     0.6,
+#     True
+# )
